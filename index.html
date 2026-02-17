@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="styles/style.css">
+    <title>Video Downloader</title>
+</head>
+<body>
+    <div class="container">
+        <h1>Video Downloader</h1>
+        <div class="subtitle">موقع تحميل فديوهات</div>
+        
+        <div id="status" class="status checking">⏳ جاري التحقق من اتصال الخادم...</div>
+
+        <div class="input-group">
+            <input type="text" id="url" placeholder="أدخل رابط الفيديو هنا" value="">
+        </div>
+        
+        <div class="btn-group">
+            <button class="btn-primary" onclick="download()" id="dlBtn">تحميل الفيديو</button>
+            <button class="btn-secondary" onclick="checkStatus()">🔍 فحص الخادم</button>
+        </div>
+        
+        <div id="result" class="result"></div>
+    </div>
+<script src="scripts/script.js"></script>
+</body>
+</html>
