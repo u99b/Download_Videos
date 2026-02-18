@@ -418,55 +418,58 @@
   async function doDownload(url, type, btnId) {
     const btn = document.getElementById(btnId);
     const progressWrap = document.getElementById('progressWrap');
-    const progressBar = document.getElementById('progressBar');
-    const dlStatus = document.getElementById('dlStatus');
-    const ext = type === 'audio' ? 'mp3' : 'mp4';
+    const progressBar  = document.getElementById('progressBar');
+    const dlStatus     = document.getElementById('dlStatus');
+    const ext      = type === 'audio' ? 'mp3' : 'mp4';
     const filename = `${type}_${Date.now()}.${ext}`;
 
-    // أولاً: جرب تحميل مباشر عبر <a download>
-    // هذا يشتغل لو السيرفر يرسل header مناسب
     btn.disabled = true;
     const origText = btn.innerHTML;
-    btn.innerHTML = type === 'video' ? '⏳ جاري التحميل...' : '⏳ جاري التحميل...';
-
+    btn.innerHTML = '⏳ جاري التحميل...';
     progressWrap.style.display = 'block';
-    progressBar.style.width = '10%';
+    progressBar.style.width = '5%';
     dlStatus.style.display = 'block';
-    dlStatus.textContent = 'جاري جلب الملف...';
+    dlStatus.textContent = 'جاري التحضير...';
 
-    // الطريقة ١: fetch → blob (يحل مشكلة "فتح في تاب" بدل التحميل)
-    try {
-      // نجرب عبر CORS proxy لأن روابط CDN الخارجية تمنع direct fetch
-      const proxyFetch = 'https://corsproxy.io/?' + encodeURIComponent(url);
-      
-      const response = await fetch(proxyFetch, { signal: AbortSignal.timeout(60000) });
-      
-      if (!response.ok) throw new Error('fetch failed');
+    // ── دوال مساعدة ──────────────────────────────────────
+    function fakeProgress(target, durationMs) {
+      // يحرك الشريط ببطء نحو target% خلال durationMs
+      const start = parseFloat(progressBar.style.width) || 0;
+      const steps = 30;
+      const step  = (target - start) / steps;
+      let i = 0;
+      return setInterval(() => {
+        if (i++ >= steps) return;
+        progressBar.style.width = (start + step * i) + '%';
+      }, durationMs / steps);
+    }
 
-      // قراءة مع progress
-      const contentLength = response.headers.get('Content-Length');
+    async function fetchBlob(fetchUrl) {
+      const res = await fetch(fetchUrl, { signal: AbortSignal.timeout(90000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const contentLength = res.headers.get('Content-Length');
       const total = contentLength ? parseInt(contentLength) : 0;
       let loaded = 0;
-      const reader = response.body.getReader();
+      const reader = res.body.getReader();
       const chunks = [];
-
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         chunks.push(value);
         loaded += value.length;
         if (total > 0) {
-          const pct = Math.round((loaded / total) * 100);
+          const pct = Math.min(95, Math.round((loaded / total) * 95));
           progressBar.style.width = pct + '%';
-          dlStatus.textContent = `تحميل ${pct}% (${(loaded/1024/1024).toFixed(1)} MB)`;
+          dlStatus.textContent = `تحميل ${pct}% · ${(loaded/1024/1024).toFixed(1)} MB`;
         } else {
-          // لا نعرف الحجم، نحرك شريط وهمي
-          progressBar.style.width = Math.min(90, (loaded/1024/1024) * 5 + 20) + '%';
-          dlStatus.textContent = `تحميل... (${(loaded/1024/1024).toFixed(1)} MB)`;
+          progressBar.style.width = Math.min(90, 10 + (loaded/1024/1024)*3) + '%';
+          dlStatus.textContent = `تحميل... ${(loaded/1024/1024).toFixed(1)} MB`;
         }
       }
+      return new Blob(chunks);
+    }
 
-      const blob = new Blob(chunks);
+    function triggerBlobSave(blob) {
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = blobUrl;
@@ -474,29 +477,48 @@
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    }
 
-      progressBar.style.width = '100%';
-      dlStatus.textContent = '✅ تم التحميل بنجاح!';
-      setTimeout(() => {
-        progressWrap.style.display = 'none';
-        dlStatus.style.display = 'none';
-      }, 3000);
+    // ── قائمة proxies للتجربة بالترتيب ──────────────────
+    const proxies = [
+      // Proxy 1: corsproxy.io
+      () => fetchBlob('https://corsproxy.io/?' + encodeURIComponent(url)),
+      // Proxy 2: allorigins
+      () => fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(90000) })
+              .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); }),
+      // Proxy 3: تحميل مباشر (بدون proxy — قد يشتغل مع بعض CDN)
+      () => fetchBlob(url),
+    ];
 
-    } catch (err) {
-      // الطريقة ٢: فتح الرابط مباشرة في تاب جديد كـ fallback
-      console.warn('Blob download failed, opening directly:', err.message);
+    let success = false;
+    for (let i = 0; i < proxies.length; i++) {
+      dlStatus.textContent = `محاولة ${i + 1} من ${proxies.length}...`;
+      const timer = fakeProgress(30 + i * 20, 8000);
+      try {
+        const blob = await proxies[i]();
+        clearInterval(timer);
+        triggerBlobSave(blob);
+        progressBar.style.width = '100%';
+        dlStatus.textContent = '✅ تم التحميل بنجاح!';
+        success = true;
+        setTimeout(() => {
+          progressWrap.style.display = 'none';
+          dlStatus.style.display = 'none';
+        }, 3000);
+        break;
+      } catch (e) {
+        clearInterval(timer);
+        console.warn(`Proxy ${i+1} failed:`, e.message);
+      }
+    }
+
+    // ── آخر خيار: فتح في تاب جديد ───────────────────────
+    if (!success) {
+      progressBar.style.background = 'var(--accent2)';
       progressBar.style.width = '100%';
-      dlStatus.textContent = '⚠️ جاري فتح الفيديو... احفظه يدوياً (كليك يمين ← حفظ)';
-      
-      // نحاول نفتح رابط مباشر مع download attribute
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.target = '_blank';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      dlStatus.innerHTML = '⚠️ اضغط مطوّلاً على الفيديو واختر <b>"حفظ الفيديو"</b>';
+      window.open(url, '_blank');
     }
 
     btn.disabled = false;
